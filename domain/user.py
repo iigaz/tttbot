@@ -1,4 +1,7 @@
 from enum import IntEnum
+from typing import List
+
+from domain.limits import USER_HIGHLIGHT_PHRASES_LEN
 
 
 class ConversationState(IntEnum):
@@ -15,6 +18,7 @@ class User:
         self.__id = id
         self.__conversation_state = ConversationState.IDLE
         self.__group = ""
+        self.__highlight_phrases = []
 
     @property
     def group(self) -> str:
@@ -31,6 +35,16 @@ class User:
     @conversation_state.setter
     def conversation_state(self, state: ConversationState):
         self.__conversation_state = state
+
+    @property
+    def highlight_phrases(self) -> str:
+        return "\n".join(self.__highlight_phrases)
+
+    def try_set_highlight_phrases(self, phrase: str) -> bool:
+        if len(phrase) + 1 > USER_HIGHLIGHT_PHRASES_LEN:
+            return False
+        self.__highlight_phrases = phrase.splitlines()
+        return True
 
     @property
     def id(self) -> int:

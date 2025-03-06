@@ -26,6 +26,8 @@ class TeleBot(telebot.TeleBot):
 
 TIMETABLE_FILE = os.path.join(gettempdir(), "bot-timetable.xlsx")
 file_lock = Lock()
+local_info = {}
+local_info["last_update"] = datetime.fromtimestamp(0, timezone.utc)
 
 db = sqlite3.connect("bot.db", check_same_thread=False)
 
@@ -33,6 +35,9 @@ settings = SettingsRepository(db)
 users = UsersRepository(db)
 
 load_dotenv()
+
+
+# region Bot Initialization
 
 bot = TeleBot(os.getenv("BOT_TOKEN"), parse_mode="HTML")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
@@ -58,31 +63,31 @@ def set_current_user(
     )
 
 
-def update_timetable():
-    link = settings.get_timetable_link()
-    if link:
-        with file_lock:
-            download_timetable_from_url(link, TIMETABLE_FILE)
-    else:
-        bot.send_message(
-            ADMIN_CHAT_ID,
-            "Укажите, пожалуйста, ссылку на расписание. "
-            "Для этого напишите /settt.",
-        )
+TIMETABLE_COMMANDS = [
+    telebot.types.BotCommand("week", "расписание на неделю"),
+    telebot.types.BotCommand("today", "расписание на сегодня"),
+    telebot.types.BotCommand("tomorrow", "расписание на завтра"),
+    telebot.types.BotCommand("setgroup", "поменять группу"),
+    telebot.types.BotCommand("cancel", "отменить действие"),
+]
+ADMIN_COMMANDS = TIMETABLE_COMMANDS + [
+    telebot.types.BotCommand("settt", "Обновить ссылку на расписание."),
+    telebot.types.BotCommand("update", "Обновить расписание."),
+]
+bot.add_custom_filter(StateFilter())
+bot.set_my_commands(
+    commands=ADMIN_COMMANDS,
+    scope=telebot.types.BotCommandScopeChat(ADMIN_CHAT_ID),
+)
+bot.set_my_commands(
+    commands=TIMETABLE_COMMANDS,
+)
 
+# endregion
 
-def init():
-    bot.add_custom_filter(StateFilter())
-    bot.delete_my_commands(scope=None, language_code=None)
-    bot.set_my_commands(
-        commands=[
-            telebot.types.BotCommand("week", "расписание на неделю"),
-            telebot.types.BotCommand("today", "расписание на сегодня"),
-            telebot.types.BotCommand("tomorrow", "расписание на завтра"),
-            telebot.types.BotCommand("setgroup", "поменять группу"),
-            telebot.types.BotCommand("cancel", "отменить действие"),
-        ],
-    )
+# region Helper Functions
+
+# region Group Management Helper Functions
 
 
 def prompt_group(message: telebot.types.Message, user: User):
@@ -91,103 +96,55 @@ def prompt_group(message: telebot.types.Message, user: User):
     bot.reply_to(message, "Напишите, пожалуйста, свою группу.")
 
 
-@bot.message_handler(commands=["start", "help"])
-def send_welcome(message: telebot.types.Message):
-    user = users.get_or_add_user_by_id(message.from_user.id)
-    bot.reply_to(
-        message,
-        f"Здрасьте, {message.from_user.full_name}!\n"
-        "Я умею только отправлять расписание!\n"
-        "Ладно, это шутка.\n\nЯ ничего не умею.",
-    )
-    prompt_group(message, user)
-    if str(message.chat.id) == ADMIN_CHAT_ID:
+# endregion
+
+
+# region Timetable Parsing Helper Functions
+
+
+def really_update_timetable():
+    with file_lock:
+        now = datetime.now(timezone.utc)
+        passed = now - local_info["last_update"]
+        now += timedelta(hours=3)
+        if now.hour in range(0, 7):
+            # Night time, no need to update so frequently
+            # Update will happen every ~3 hours
+            return passed.seconds >= 3 * 60 * 60
+        elif now.hour in range(7, 18):
+            # Work time, modifications are likely to be made in this time range
+            # Update will happen every ~5 minutes
+            return passed.seconds >= 5 * 60
+        else:  # 18 - 24
+            # Evening, modifications can happen but not as likely
+            # Update will happen every ~30 minutes
+            return passed.seconds >= 30 * 60
+
+
+def update_timetable(force=False):
+    if not (force or really_update_timetable()):
+        return
+    link = settings.get_timetable_link()
+    if link:
+        try:
+            with file_lock:
+                download_timetable_from_url(link, TIMETABLE_FILE)
+                local_info["last_update"] = datetime.now(timezone.utc)
+        except Exception as e:
+            bot.send_message(
+                ADMIN_CHAT_ID,
+                "Не удалось обновить расписание. "
+                "Не верьте, если я сейчас напишу, "
+                "что расписание было обновлено.",
+            )
+            print(e)
+
+    else:
         bot.send_message(
             ADMIN_CHAT_ID,
-            "Здравствуйте. Этот чат был назначен как административный.\n"
-            "Помимо обычных команд, вам также доступны:\n"
-            "/settt - обновить ссылку на расписание;\n"
-            "/update - обновить данные расписания.\n"
-            "А еще вы получаете это эксклюзивное сообщение.",
+            "Укажите, пожалуйста, ссылку на расписание. "
+            "Для этого напишите /settt.",
         )
-
-
-@bot.message_handler(commands=["cancel"])
-def exit_settings(message, react=True):
-    user = users.get_or_add_user_by_id(message.from_user.id)
-    user.conversation_state = ConversationState.IDLE
-    users.update_user(user)
-    if react:
-        bot.set_message_reaction(
-            message.chat.id,
-            message.id,
-            [telebot.types.ReactionTypeEmoji("👌")],
-        )
-
-
-@bot.message_handler(
-    func=lambda m: str(m.chat.id) == ADMIN_CHAT_ID, commands=["settt"]
-)
-def set_timetable(message: telebot.types.Message):
-    user = bot.current_user
-    user.conversation_state = ConversationState.SETTING_LINK
-    users.update_user(user)
-    bot.reply_to(message, "Пришлите новую ссылку.")
-
-
-@bot.message_handler(states=[ConversationState.SETTING_LINK])
-def handle_set_timetable(message: telebot.types.Message):
-    if str(message.chat.id) != ADMIN_CHAT_ID:
-        bot.reply_to(
-            message, "У вас нет прав на это действие. (Вы как сюда попали?)"
-        )
-    else:
-        link = settings.get_timetable_link()
-        try:
-            settings.set_timetable_link(message.text)
-            update_timetable()
-            bot.reply_to(message, "Ссылка была обновлена.")
-        except Exception:
-            settings.set_timetable_link(link)
-            update_timetable()
-            bot.reply_to(message, "Не удалось обновить ссылку.")
-    exit_settings(message, False)
-
-
-@bot.message_handler(
-    func=lambda m: str(m.chat.id) == ADMIN_CHAT_ID, commands=["update"]
-)
-def update_timetable_command(message: telebot.types.Message):
-    update_timetable()
-    bot.reply_to(message, "Расписание было обновлено.")
-
-
-@bot.message_handler(commands=["setgroup"])
-def set_user_group(message):
-    user = users.get_or_add_user_by_id(message.from_user.id)
-    prompt_group(message, user)
-
-
-@bot.message_handler(states=[ConversationState.SETTING_GROUP])
-def handle_set_group(message: telebot.types.Message):
-    user = bot.current_user
-    group = message.text
-    tt = get_timetable_for_group_from_file(TIMETABLE_FILE, group)
-    if not tt:
-        bot.reply_to(
-            message,
-            "Группа не была найдена в расписании. Попробуйте другую.",
-        )
-        return
-    user.conversation_state = ConversationState.IDLE
-    user.group = group
-    users.update_user(user)
-    bot.set_message_reaction(
-        message.chat.id,
-        message.id,
-        [telebot.types.ReactionTypeEmoji("👍")],
-    )
-    bot.reply_to(message, "Теперь можно получать расписание.")
 
 
 def timetable_range_starting_from(
@@ -202,9 +159,15 @@ def timetable_range_starting_from(
         day = tt.timetable[(start + i) % len(tt.timetable)]
         reply = f"<b><u>{day.weekday}:</u></b>\n"
         for row in day.timetable:
-            lesson = (row.lessons or "—").replace(
-                user.group, "<i><u>" + user.group + "</u></i>"
-            )
+            lesson = row.lessons or "—"
+            highlights = [user.group] + user.highlight_phrases.splitlines()
+            for highlight in highlights:
+                lesson = re.sub(
+                    re.escape(highlight),
+                    r"<i><u>\g<0></u></i>",
+                    lesson,
+                    flags=re.IGNORECASE,
+                )
             reply += f"\n<b><i>{row.time}</i></b>\n{lesson}\n"
         if len(day.timetable) == 0:
             reply += '<span class="tg-spoiler">отдыхать</span>'
@@ -220,23 +183,7 @@ def timetable_range(
     timetable_range_starting_from(message, now.weekday(), length)
 
 
-@bot.message_handler(states=[ConversationState.IDLE], commands=["week"])
-def timetable_week(message):
-    timetable_range(message, 0, 7)
-
-
-@bot.message_handler(states=[ConversationState.IDLE], commands=["today"])
-def timetable_today(message):
-    timetable_range(message, 0, 1)
-
-
-@bot.message_handler(state=[ConversationState.IDLE], commands=["tomorrow"])
-def timetable_tomorrow(message):
-    timetable_range(message, 1, 1)
-
-
-@bot.message_handler(states=[ConversationState.IDLE])
-def handle_idle(message: telebot.types.Message):
+def guess_request(message: telebot.types.Message):
     DAYS = [
         "понедельник",
         "вторник",
@@ -303,19 +250,148 @@ def handle_idle(message: telebot.types.Message):
     )
 
 
+# endregion
+
+# endregion
+
+
+# region Handlers
+
+
+@bot.message_handler(commands=["start", "help"])
+def send_welcome(message: telebot.types.Message):
+    user = users.get_or_add_user_by_id(message.from_user.id)
+    bot.reply_to(
+        message,
+        f"Здрасьте, {message.from_user.full_name}!\n"
+        "Я умею <s>только</s> отправлять расписание!\n"
+        "Для того чтобы начать, мне нужна ваша группа.",
+    )
+    prompt_group(message, user)
+    if str(message.chat.id) == ADMIN_CHAT_ID:
+        bot.send_message(
+            ADMIN_CHAT_ID,
+            "Здравствуйте. Этот чат был назначен как административный.\n"
+            "Помимо обычных команд, вам также доступны:\n"
+            "/settt - обновить ссылку на расписание;\n"
+            "/update - обновить данные расписания.\n"
+            "А еще вы получаете это эксклюзивное сообщение.",
+        )
+
+
+@bot.message_handler(commands=["cancel"])
+def exit_settings(message, react=True):
+    user = users.get_or_add_user_by_id(message.from_user.id)
+    user.conversation_state = ConversationState.IDLE
+    users.update_user(user)
+    if react:
+        bot.set_message_reaction(
+            message.chat.id,
+            message.id,
+            [telebot.types.ReactionTypeEmoji("👌")],
+        )
+
+
+@bot.message_handler(
+    func=lambda m: str(m.chat.id) == ADMIN_CHAT_ID, commands=["settt"]
+)
+def set_timetable(message: telebot.types.Message):
+    user = bot.current_user
+    user.conversation_state = ConversationState.SETTING_LINK
+    users.update_user(user)
+    bot.reply_to(message, "Пришлите новую ссылку.")
+
+
+@bot.message_handler(states=[ConversationState.SETTING_LINK])
+def handle_set_timetable(message: telebot.types.Message):
+    if str(message.chat.id) != ADMIN_CHAT_ID:
+        bot.reply_to(
+            message, "У вас нет прав на это действие. (Вы как сюда попали?)"
+        )
+    else:
+        link = settings.get_timetable_link()
+        try:
+            settings.set_timetable_link(message.text)
+            update_timetable()
+            bot.reply_to(message, "Ссылка была обновлена.")
+        except Exception:
+            settings.set_timetable_link(link)
+            update_timetable()
+            bot.reply_to(message, "Не удалось обновить ссылку.")
+    exit_settings(message, False)
+
+
+@bot.message_handler(
+    func=lambda m: str(m.chat.id) == ADMIN_CHAT_ID, commands=["update"]
+)
+def update_timetable_command(message: telebot.types.Message):
+    update_timetable(force=True)
+    bot.reply_to(message, "Расписание было обновлено.")
+
+
+@bot.message_handler(commands=["setgroup"])
+def set_user_group(message):
+    user = users.get_or_add_user_by_id(message.from_user.id)
+    prompt_group(message, user)
+
+
+@bot.message_handler(states=[ConversationState.SETTING_GROUP])
+def handle_set_group(message: telebot.types.Message):
+    user = bot.current_user
+    group = message.text
+    tt = get_timetable_for_group_from_file(TIMETABLE_FILE, group)
+    if not tt:
+        bot.reply_to(
+            message,
+            "Группа не была найдена в расписании. Попробуйте другую.",
+        )
+        return
+    user.conversation_state = ConversationState.IDLE
+    user.group = group
+    users.update_user(user)
+    bot.set_message_reaction(
+        message.chat.id,
+        message.id,
+        [telebot.types.ReactionTypeEmoji("👍")],
+    )
+    bot.reply_to(message, "Теперь можно получать расписание.")
+
+
+@bot.message_handler(states=[ConversationState.IDLE], commands=["week"])
+def timetable_week(message):
+    timetable_range(message, 0, 7)
+
+
+@bot.message_handler(states=[ConversationState.IDLE], commands=["today"])
+def timetable_today(message):
+    timetable_range(message, 0, 1)
+
+
+@bot.message_handler(state=[ConversationState.IDLE], commands=["tomorrow"])
+def timetable_tomorrow(message):
+    timetable_range(message, 1, 1)
+
+
+@bot.message_handler(states=[ConversationState.IDLE])
+def handle_idle(message: telebot.types.Message):
+    guess_request(message)
+
+
 @bot.message_handler(func=lambda m: True)
 def unknown_message(message: telebot.types.Message):
     bot.reply_to(message, "Вы нашли ошибку в боте !!!")
+
+
+# endregion
 
 
 def scheduler():
     schedule.every(5).minutes.do(update_timetable)
     while True:
         schedule.run_pending()
-        sleep(1)
+        sleep(60)
 
 
-init()
 update_timetable()
 
 

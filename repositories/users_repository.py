@@ -1,4 +1,5 @@
 from domain.user import User, ConversationState
+from domain.limits import USER_HIGHLIGHT_PHRASES_LEN
 from sqlite3 import Connection
 
 
@@ -9,11 +10,13 @@ class UsersRepository:
         if remove_db:
             cur.execute('DROP TABLE IF EXISTS "users"')
         cur.execute(
-            """
+            f"""
 CREATE TABLE IF NOT EXISTS "users" (
     "id" BIGINT PRIMARY KEY,
     "group" VARCHAR(10) NOT NULL DEFAULT '',
-    "conversation_state" INTEGER NOT NULL DEFAULT 1
+    "conversation_state" INTEGER NOT NULL DEFAULT 1,
+    "highlight_phrases" VARCHAR({USER_HIGHLIGHT_PHRASES_LEN})
+                        NOT NULL DEFAULT ''
 )"""
         )
         db.commit()
@@ -29,21 +32,28 @@ CREATE TABLE IF NOT EXISTS "users" (
             user_row = res.fetchone()
             self.__db.commit()
         if user_row:
-            (uid, group, state) = user_row
+            (uid, group, state, phrases) = user_row
             user = User(uid)
             user.group = group
             user.conversation_state = ConversationState(state)
+            user.try_set_highlight_phrases(phrases)
             return user
-        else:
-            print("Could not save user.")
-            return User(user_id)
+        print("Could not save user.")
+        return User(user_id)
 
     def update_user(self, user: User) -> None:
         cur = self.__db.cursor()
         cur.execute(
             'UPDATE OR IGNORE "users"'
-            'SET "group" = ?, "conversation_state" = ?'
+            'SET "group" = ?, '
+            '"conversation_state" = ?, '
+            '"highlight_phrases" = ? '
             'WHERE "id" = ?',
-            (user.group, int(user.conversation_state), user.id),
+            (
+                user.group,
+                int(user.conversation_state),
+                user.highlight_phrases,
+                user.id,
+            ),
         )
         self.__db.commit()
