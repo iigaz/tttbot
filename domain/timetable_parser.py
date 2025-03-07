@@ -1,6 +1,7 @@
 import openpyxl
 from openpyxl.worksheet.worksheet import Worksheet
 from typing import List
+import re
 
 
 class TimetableRow:
@@ -96,6 +97,8 @@ def get_timetable_for_group_from_file(
     workbook = openpyxl.load_workbook(filename)
     for ws in workbook.worksheets:
         for col in ws.iter_cols(1, 100, 2, 2):  # Why 100? No reason.
-            if (col[0].value or "").strip() == group:
+            if re.match(
+                rf"\b{re.escape(group)}\b", col[0].value or "", re.IGNORECASE
+            ):
                 return get_timetable_for_week_from_worksheet(ws, col[0].column)
     return None
