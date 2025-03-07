@@ -68,6 +68,7 @@ TIMETABLE_COMMANDS = [
     telebot.types.BotCommand("today", "расписание на сегодня"),
     telebot.types.BotCommand("tomorrow", "расписание на завтра"),
     telebot.types.BotCommand("setgroup", "поменять группу"),
+    telebot.types.BotCommand("sethl", "изменить фразы для выделения"),
     telebot.types.BotCommand("cancel", "отменить действие"),
 ]
 ADMIN_COMMANDS = TIMETABLE_COMMANDS + [
@@ -137,7 +138,7 @@ def update_timetable(force=False):
                 "Не верьте, если я сейчас напишу, "
                 "что расписание было обновлено.",
             )
-            print(e)
+            bot.send_message(ADMIN_CHAT_ID, "Причина: " + str(e))
 
     else:
         bot.send_message(
@@ -331,8 +332,7 @@ def update_timetable_command(message: telebot.types.Message):
 
 @bot.message_handler(commands=["setgroup"])
 def set_user_group(message):
-    user = users.get_or_add_user_by_id(message.from_user.id)
-    prompt_group(message, user)
+    prompt_group(message, bot.current_user)
 
 
 @bot.message_handler(states=[ConversationState.SETTING_GROUP])
@@ -355,6 +355,44 @@ def handle_set_group(message: telebot.types.Message):
         [telebot.types.ReactionTypeEmoji("👍")],
     )
     bot.reply_to(message, "Теперь можно получать расписание.")
+
+
+@bot.message_handler(commands=["sethl"])
+def set_hl(message):
+    bot.reply_to(
+        message,
+        "Пришлите фразы, "
+        "которые нужно выделить в расписании, "
+        "по одной на строке.\n\n"
+        f"Ваша группа ({bot.current_user.group}) выделяется всегда, "
+        "вне зависимости от заданных фраз.\n"
+        + (
+            "Кроме нее, также выделяются следующие фразы:"
+            if len(bot.current_user.highlight_phrases) > 0
+            else ""
+        ),
+    )
+    if len(bot.current_user.highlight_phrases) > 0:
+        bot.reply_to(message, bot.current_user.highlight_phrases)
+    bot.current_user.conversation_state = (
+        ConversationState.SETTING_HIGHLIGHT_PHRASES
+    )
+    users.update_user(bot.current_user)
+
+
+@bot.message_handler(states=[ConversationState.SETTING_HIGHLIGHT_PHRASES])
+def handle_set_hl(message: telebot.types.Message):
+    success = bot.current_user.try_set_highlight_phrases(message.text)
+    if success:
+        bot.current_user.conversation_state = ConversationState.IDLE
+        users.update_user(bot.current_user)
+        bot.reply_to(message, "Фразы сохранены.")
+    else:
+        bot.reply_to(
+            message,
+            "К сожалению, фраз слишком много и/или они слишком длинные. "
+            "Попробуйте задать меньше фраз или уменьшить их длину.",
+        )
 
 
 @bot.message_handler(states=[ConversationState.IDLE], commands=["week"])

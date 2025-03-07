@@ -8,6 +8,7 @@ class ConversationState(IntEnum):
     # User states
     IDLE = 1
     SETTING_GROUP = 2
+    SETTING_HIGHLIGHT_PHRASES = 3
 
     # Administration states
     SETTING_LINK = 32
