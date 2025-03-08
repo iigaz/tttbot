@@ -3,6 +3,7 @@ from threading import Thread
 from typing import List, Iterator
 from time import sleep
 from tempfile import gettempdir
+from hashlib import md5
 import sqlite3
 import telebot
 import schedule
@@ -13,6 +14,8 @@ from repositories.users_repository import UsersRepository
 from services.timetable_service import TimetableService, GroupNotFoundException
 from services.timetable_updater_service import TimetableUpdaterService
 import services.types
+
+# TODO: Week number
 
 telebot.apihelper.ENABLE_MIDDLEWARE = True
 
@@ -115,7 +118,8 @@ def update_timetable():
             bot.send_message(ADMIN_CHAT_ID, message.text)
     except Exception as e:
         bot.send_message(
-            f"Не удалось отправить сообщение об обновлении. Причина: {e}"
+            ADMIN_CHAT_ID,
+            f"Не удалось отправить сообщение об обновлении. Причина: {e}",
         )
         raise e
 
@@ -316,8 +320,36 @@ def inline_request(inline_query: telebot.types.InlineQuery):
     user = users.get_user_by_id(inline_query.from_user.id)
     group = user.group if user is not None else None
     hp = user.highlight_phrases if user is not None else None
-    # TODO: Replace to answer_inline
-    service.guess_everything(inline_query.query, group, hp)
+    results = []
+    try:
+        group, it = service.guess_everything(inline_query.query, group, hp)
+        for message in it:
+            if message.to == services.types.Recipient.ADMIN:
+                bot.send_message(ADMIN_CHAT_ID, message.text)
+                continue
+            if message.is_error:
+                results = []
+                break
+            mid = md5(message.text.encode("utf-8")).hexdigest()
+            results.append(
+                telebot.types.InlineQueryResultArticle(
+                    mid,
+                    message.title,
+                    telebot.types.InputTextMessageContent(
+                        message.text, parse_mode="HTML"
+                    ),
+                    description=f"Расписание группы {group}",
+                    hide_url=True,
+                )
+            )
+    except GroupNotFoundException:
+        results = []
+    bot.answer_inline_query(
+        inline_query.id,
+        results,
+        cache_time=60,
+        is_personal=(user is not None),
+    )
 
 
 # endregion

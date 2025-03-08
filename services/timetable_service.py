@@ -20,7 +20,7 @@ class TimetableService:
     def prompt_group(self, user: User) -> Iterator[Message]:
         user.conversation_state = ConversationState.SETTING_GROUP
         self.__users.update_user(user)
-        yield Message("Напишите, пожалуйста, свою группу.")
+        yield Message("Напишите, пожалуйста, свою группу.", is_error=True)
 
     def timetable_range_starting_from(
         self, group: str, start: int, length: int, highlight_phrases: str = ""
@@ -44,7 +44,7 @@ class TimetableService:
                 reply += f"\n<b><i>{row.time}</i></b>\n{lesson}\n"
             if len(day.timetable) == 0:
                 reply += '<span class="tg-spoiler">отдыхать</span>'
-            yield Message(reply)
+            yield Message(reply, title=day.weekday)
 
     def timetable_range(
         self,
@@ -130,7 +130,8 @@ class TimetableService:
                     "  Примеры: на сегодня; на вчера; послезавтра; на неделю\n"
                     "- Дата в <i>текущем</i> году (месяце), в формате "
                     "<code>день.[месяц]</code>.\n"
-                    "  Примеры: 3.; 03.12; 1.1"
+                    "  Примеры: 3.; 03.12; 1.1",
+                    is_error=True,
                 )
             ]
         )
@@ -140,16 +141,20 @@ class TimetableService:
         text: str,
         user_group: str | None = None,
         user_highlight_phrases: str | None = None,
-    ) -> Iterator[Message]:
+    ) -> (str, Iterator[Message]):
         res = re.search(r"\b(\d{1,2}-\d{2,3}\w{,2})\b(.*)", text)
         if res and len(res.groups()) >= 2:
             groups = res.groups()
             group = groups[0]
             rest = groups[1].strip()
             if group and rest:
-                return self.guess_request(group, rest, user_highlight_phrases)
-        if user_group is not None:
-            return self.guess_request(user_group, text, user_highlight_phrases)
+                return group, self.guess_request(
+                    group, rest, user_highlight_phrases or ""
+                )
+        elif user_group is not None:
+            return user_group, self.guess_request(
+                user_group, text, user_highlight_phrases or ""
+            )
         raise GroupNotFoundException()
 
     def try_group(self, group: str) -> bool:
