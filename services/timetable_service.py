@@ -129,7 +129,7 @@ class TimetableService:
                 )
             except ValueError:
                 pass
-        dt = re.match(r"^(\d{1,2})\.(\d{1,2})?$", text)
+        dt = re.match(r"^(\d{1,2})\.(?:(\d{1,2})(?:\.(\d{4}))?)?$", text)
         if dt:
             groups = dt.groups()
             now = datetime.now(timezone.utc) + timedelta(hours=3)
@@ -137,13 +137,16 @@ class TimetableService:
             month = (
                 int(groups[1]) if len(groups) > 1 and groups[1] else now.month
             )
-            weekday = datetime(now.year, month, day, now.hour).weekday()
+            year = (
+                int(groups[2]) if len(groups) > 2 and groups[2] else now.year
+            )
+            cd = date(year, month, day)
             return self.timetable_range_starting_from(
                 group,
-                weekday,
+                cd.weekday(),
                 1,
                 highlight_phrases,
-                date(now.year, month, day),
+                cd,
             )
         for i in range(len(DAYS)):
             if re.search(rf"\b{DAYS[i]}\b", text, re.IGNORECASE):
@@ -169,8 +172,8 @@ class TimetableService:
                     "  Примеры: +2; -1\n"
                     "- Сдвиг отдельным словом в любом месте сообщения.\n"
                     "  Примеры: на сегодня; на вчера; послезавтра; на неделю\n"
-                    "- Дата в <i>текущем</i> году (месяце), в формате "
-                    "<code>день.[месяц]</code>.\n"
+                    "- Дата в году (месяце), в формате "
+                    "<code>день.[месяц[.год]]</code>.\n"
                     "  Примеры: 3.; 03.12; 1.1",
                     is_error=True,
                 )
