@@ -1,10 +1,10 @@
-from typing import Iterator
+from typing import Iterator, Callable
 from services.types import Message
 from repositories.users_repository import UsersRepository
 from domain.user import User, ConversationState
 from domain.timetable_parser import get_timetable_for_group_from_file
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, date
 
 
 class GroupNotFoundException(Exception):
@@ -13,9 +13,15 @@ class GroupNotFoundException(Exception):
 
 
 class TimetableService:
-    def __init__(self, timetable_file: str, users_repository: UsersRepository):
+    def __init__(
+        self,
+        timetable_file: str,
+        users_repository: UsersRepository,
+        week_count_start_generator: Callable[[], date],
+    ):
         self.__timetable_file = timetable_file
         self.__users = users_repository
+        self.__week_count_start_generator = week_count_start_generator
 
     def prompt_group(self, user: User) -> Iterator[Message]:
         user.conversation_state = ConversationState.SETTING_GROUP
@@ -23,14 +29,37 @@ class TimetableService:
         yield Message("Напишите, пожалуйста, свою группу.", is_error=True)
 
     def timetable_range_starting_from(
-        self, group: str, start: int, length: int, highlight_phrases: str = ""
+        self,
+        group: str,
+        start: int,
+        length: int,
+        highlight_phrases: str = "",
+        start_date: date | None = None,
     ) -> Iterator[Message]:
+        if not group:
+            raise GroupNotFoundException()
         tt = get_timetable_for_group_from_file(self.__timetable_file, group)
         if tt is None:
             raise GroupNotFoundException()
         for i in range(length):
             day = tt.timetable[(start + i) % len(tt.timetable)]
-            reply = f"<b><u>{day.weekday}:</u></b>\n"
+            week_count_start = self.__week_count_start_generator()
+            week_number_str = ""
+            current_date = None
+            week_number = None
+            if start_date and week_count_start:
+                current_date = start_date + timedelta(days=i)
+                week_number = (
+                    current_date.isocalendar()[1]
+                    - week_count_start.isocalendar()[1]
+                ) + 1
+                week_number_str = (
+                    f"{current_date.isoformat()}, неделя {week_number}, "
+                )
+            reply = (
+                f"<b><u>{day.weekday}</u></b> "
+                f"({week_number_str}группа {group}):\n"
+            )
             for row in day.timetable:
                 lesson = row.lessons or "—"
                 highlights = [group] + highlight_phrases.splitlines()
@@ -44,7 +73,15 @@ class TimetableService:
                 reply += f"\n<b><i>{row.time}</i></b>\n{lesson}\n"
             if len(day.timetable) == 0:
                 reply += '<span class="tg-spoiler">отдыхать</span>'
-            yield Message(reply, title=day.weekday)
+            yield Message(
+                reply,
+                meta={
+                    "day": current_date.isoformat(),
+                    "weekday": day.weekday,
+                    "group": group,
+                    "week_number": str(week_number),
+                },
+            )
 
     def timetable_range(
         self,
@@ -57,7 +94,7 @@ class TimetableService:
             days=start_delta_days, hours=3
         )
         return self.timetable_range_starting_from(
-            group, now.weekday(), length, highlight_phrases
+            group, now.weekday(), length, highlight_phrases, now.date()
         )
 
     def guess_request(
@@ -92,9 +129,9 @@ class TimetableService:
                 )
             except ValueError:
                 pass
-        date = re.match(r"^(\d{1,2})\.(\d{1,2})?$", text)
-        if date:
-            groups = date.groups()
+        dt = re.match(r"^(\d{1,2})\.(\d{1,2})?$", text)
+        if dt:
+            groups = dt.groups()
             now = datetime.now(timezone.utc) + timedelta(hours=3)
             day = int(groups[0]) if len(groups) > 0 and groups[0] else now.day
             month = (
@@ -102,7 +139,11 @@ class TimetableService:
             )
             weekday = datetime(now.year, month, day, now.hour).weekday()
             return self.timetable_range_starting_from(
-                group, weekday, 1, highlight_phrases
+                group,
+                weekday,
+                1,
+                highlight_phrases,
+                date(now.year, month, day),
             )
         for i in range(len(DAYS)):
             if re.search(rf"\b{DAYS[i]}\b", text, re.IGNORECASE):
@@ -141,18 +182,18 @@ class TimetableService:
         text: str,
         user_group: str | None = None,
         user_highlight_phrases: str | None = None,
-    ) -> (str, Iterator[Message]):
+    ) -> Iterator[Message]:
         res = re.search(r"\b(\d{1,2}-\d{2,3}\w{,2})\b(.*)", text)
         if res and len(res.groups()) >= 2:
             groups = res.groups()
             group = groups[0]
             rest = groups[1].strip()
             if group and rest:
-                return group, self.guess_request(
+                return self.guess_request(
                     group, rest, user_highlight_phrases or ""
                 )
         elif user_group is not None:
-            return user_group, self.guess_request(
+            return self.guess_request(
                 user_group, text, user_highlight_phrases or ""
             )
         raise GroupNotFoundException()

@@ -1,4 +1,5 @@
 import os
+from datetime import date
 from threading import Thread
 from typing import List, Iterator
 from time import sleep
@@ -15,8 +16,6 @@ from services.timetable_service import TimetableService, GroupNotFoundException
 from services.timetable_updater_service import TimetableUpdaterService
 import services.types
 
-# TODO: Week number
-
 telebot.apihelper.ENABLE_MIDDLEWARE = True
 
 
@@ -30,7 +29,9 @@ db = sqlite3.connect("bot.db", check_same_thread=False)
 
 users = UsersRepository(db)
 settings = SettingsRepository(db)
-service = TimetableService(TIMETABLE_FILE, users)
+service = TimetableService(
+    TIMETABLE_FILE, users, settings.get_week_count_start
+)
 updater = TimetableUpdaterService(TIMETABLE_FILE, settings)
 
 load_dotenv()
@@ -71,6 +72,7 @@ TIMETABLE_COMMANDS = [
 ]
 ADMIN_COMMANDS = TIMETABLE_COMMANDS + [
     telebot.types.BotCommand("settt", "Обновить ссылку на расписание."),
+    telebot.types.BotCommand("setwcs", "Обновить дату начала отсчета недель."),
     telebot.types.BotCommand("update", "Обновить расписание."),
 ]
 bot.add_custom_filter(StateFilter())
@@ -139,15 +141,6 @@ def send_welcome(message: telebot.types.Message):
         "Для того чтобы начать, мне нужна ваша группа.",
     )
     send_messages_as_reply_to(message, service.prompt_group(bot.current_user))
-    if str(message.chat.id) == ADMIN_CHAT_ID:
-        bot.send_message(
-            ADMIN_CHAT_ID,
-            "Здравствуйте. Этот чат был назначен как административный.\n"
-            "Помимо обычных команд, вам также доступны:\n"
-            "/settt - обновить ссылку на расписание;\n"
-            "/update - обновить данные расписания.\n"
-            "А еще вы получаете это эксклюзивное сообщение.",
-        )
 
 
 @bot.message_handler(commands=["cancel"])
@@ -191,10 +184,42 @@ def handle_set_timetable(message: telebot.types.Message):
 
 
 @bot.message_handler(
+    func=lambda m: str(m.chat.id) == ADMIN_CHAT_ID, commands=["setwcs"]
+)
+def set_week_count_start(message: telebot.types.Message):
+    bot.current_user.conversation_state = (
+        ConversationState.SETTING_WEEK_COUNT_START
+    )
+    users.update_user(bot.current_user)
+    bot.reply_to(message, "Пришлите дату начала отсчета недель.")
+
+
+@bot.message_handler(states=[ConversationState.SETTING_WEEK_COUNT_START])
+def handle_set_week_count_start(message: telebot.types.Message):
+    if str(message.chat.id) != ADMIN_CHAT_ID:
+        bot.reply_to(
+            message, "У вас нет прав на это действие. (Вы как сюда попали?)"
+        )
+    else:
+        try:
+            nd = date.fromisoformat(message.text)
+            settings.set_week_count_start(nd)
+            bot.set_message_reaction(
+                message.chat.id,
+                message.id,
+                [telebot.types.ReactionTypeEmoji("👌")],
+            )
+        except Exception:
+            bot.reply_to(message, "Это не дата.")
+
+    exit_settings(message, False)
+
+
+@bot.message_handler(
     func=lambda m: str(m.chat.id) == ADMIN_CHAT_ID, commands=["update"]
 )
 def update_timetable_command(message: telebot.types.Message):
-    send_messages_as_reply_to(updater.update_timetable(force=True))
+    send_messages_as_reply_to(message, updater.update_timetable(force=True))
     bot.set_message_reaction(
         message.chat.id,
         message.id,
@@ -322,8 +347,7 @@ def inline_request(inline_query: telebot.types.InlineQuery):
     hp = user.highlight_phrases if user is not None else None
     results = []
     try:
-        group, it = service.guess_everything(inline_query.query, group, hp)
-        for message in it:
+        for message in service.guess_everything(inline_query.query, group, hp):
             if message.to == services.types.Recipient.ADMIN:
                 bot.send_message(ADMIN_CHAT_ID, message.text)
                 continue
@@ -331,14 +355,18 @@ def inline_request(inline_query: telebot.types.InlineQuery):
                 results = []
                 break
             mid = md5(message.text.encode("utf-8")).hexdigest()
+            group = message.get_meta("group") or "?"
+            day = message.get_meta("day")
+            title = message.get_meta("weekday") or "???"
             results.append(
                 telebot.types.InlineQueryResultArticle(
                     mid,
-                    message.title,
+                    title,
                     telebot.types.InputTextMessageContent(
                         message.text, parse_mode="HTML"
                     ),
-                    description=f"Расписание группы {group}",
+                    description=f"Расписание группы {group}"
+                    + (f" на {day}" if day else ""),
                     hide_url=True,
                 )
             )

@@ -11,7 +11,8 @@ class ConversationState(IntEnum):
     SETTING_HIGHLIGHT_PHRASES = 3
 
     # Administration states
-    SETTING_LINK = 32
+    SETTING_LINK = 256
+    SETTING_WEEK_COUNT_START = 257
 
 
 class User:

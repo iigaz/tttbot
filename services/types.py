@@ -1,4 +1,5 @@
 from enum import Enum
+from typing import Dict
 
 
 class Recipient(Enum):
@@ -12,14 +13,12 @@ class Message:
         text: str,
         to: Recipient = Recipient.SENDER,
         is_error: bool = False,
-        title: str = None,
+        meta: Dict[str, str] = {},
     ):
         self.__to = to
         self.__text = text
         self.__is_error = is_error
-        self.__title = (
-            title if title is not None else text.splitlines()[0][:64]
-        )
+        self.__meta = meta
 
     @property
     def to(self):
@@ -33,6 +32,5 @@ class Message:
     def is_error(self):
         return self.__is_error
 
-    @property
-    def title(self):
-        return self.__title
+    def get_meta(self, key: str):
+        return self.__meta.get(key)
