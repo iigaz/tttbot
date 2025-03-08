@@ -195,6 +195,10 @@ class TimetableService:
                 return self.guess_request(
                     group, rest, user_highlight_phrases or ""
                 )
+            elif group:
+                return self.timetable_range(
+                    group, 0, 7, user_highlight_phrases or ""
+                )
         elif user_group is not None:
             return self.guess_request(
                 user_group, text, user_highlight_phrases or ""
