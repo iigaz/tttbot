@@ -76,7 +76,7 @@ class TimetableService:
             yield Message(
                 reply,
                 meta={
-                    "day": current_date.isoformat(),
+                    "day": current_date.isoformat() if current_date else "",
                     "weekday": day.weekday,
                     "group": group,
                     "week_number": str(week_number),
