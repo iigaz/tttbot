@@ -312,7 +312,7 @@ def timetable_today(message):
     )
 
 
-@bot.message_handler(state=[ConversationState.IDLE], commands=["tomorrow"])
+@bot.message_handler(states=[ConversationState.IDLE], commands=["tomorrow"])
 def timetable_tomorrow(message):
     send_messages_as_reply_to(
         message,
