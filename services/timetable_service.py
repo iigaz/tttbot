@@ -5,6 +5,7 @@ from domain.user import User, ConversationState
 from domain.timetable_parser import get_timetable_for_group_from_file
 import re
 from datetime import datetime, timedelta, timezone, date
+from time import mktime
 
 
 class GroupNotFoundException(Exception):
@@ -50,9 +51,10 @@ class TimetableService:
             if start_date and week_count_start:
                 current_date = start_date + timedelta(days=i)
                 week_number = (
-                    current_date.isocalendar()[1]
-                    - week_count_start.isocalendar()[1]
-                ) + 1
+                    self.__get_week_number(current_date)
+                    - self.__get_week_number(week_count_start)
+                    + 1
+                )
                 week_number_str = (
                     f"{current_date.isoformat()}, неделя {week_number}, "
                 )
@@ -211,3 +213,9 @@ class TimetableService:
             return True
         except GroupNotFoundException:
             return False
+
+    def __get_week_number(self, d: date) -> int:
+        utc_hours_offset = 3 * 60 * 60
+        return int(
+            (mktime(d.timetuple()) + utc_hours_offset - 345600) / 604800
+        )
